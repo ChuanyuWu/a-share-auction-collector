@@ -63,56 +63,7 @@ def collect(db, session, symbol, now, p):
     logging.info('%s %s saved %d detail rows; quote %s',symbol,p,len(rows),source)
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--symbols',required=True,help='comma-separated six-digit Shanghai/Shenzhen A-share codes')
-    parser.add_argument('--interval',type=float,default=10)
-    parser.add_argument('--data-dir',default='data')
-    parser.add_argument('--once',action='store_true',help='one collection cycle during market hours')
-    parser.add_argument('--scheduled',action='store_true',help='exit on holidays or at 15:05 Shanghai time')
-    args = parser.parse_args()
-    if args.scheduled and dt.datetime.now(TZ).strftime('%H:%M:%S') >= '15:05:00':
-        print('Scheduled run: after 15:05; nothing to collect today.')
-        return
-    symbols = list(dict.fromkeys(args.symbols.split(',')))
-    if args.interval < 3: parser.error('interval must be >= 3 seconds')
-    if not all(len(s)==6 and s.isdigit() and s.startswith(('600','601','603','605','688','000','001','002','003','300','301')) for s in symbols):
-        parser.error('only supported Shanghai/Shenzhen A-share six-digit codes')
-    root = Path(args.data_dir); root.mkdir(parents=True,exist_ok=True)
-    logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s',handlers=[logging.StreamHandler(),logging.FileHandler(root/'collector.log',encoding='utf8')])
-    lock = open(root/'collector.lock', 'a+b')
-    if __import__('os').name == 'nt':
-        import msvcrt
-        lock.seek(0); lock.write(b'0'); lock.flush(); lock.seek(0)
-        try: msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError:
-            logging.info('another collector is running'); return
-    import akshare as ak
-    calendar = set(ak.tool_trade_date_hist_sina()['trade_date'].astype(str))
-    today = dt.datetime.now(TZ).date().isoformat()
-    if today > max(calendar): raise RuntimeError('calendar does not cover today; update AKShare/calendar before collecting')
-    logging.info('calendar ready; coverage through %s; symbols=%s', max(calendar), symbols)
-    if args.scheduled and today not in calendar:
-        logging.info('non-trading day; exiting'); return
-    session = requests.Session()
-    session.headers['User-Agent']='Mozilla/5.0'
-    db = connect(root/'market.sqlite3')
-    try:
-        while True:
-            now = dt.datetime.now(TZ); day = now.date().isoformat()
-            if args.scheduled and (day != today or now.strftime('%H:%M:%S') >= '15:05:00'):
-                logging.info('scheduled session finished'); break
-            if day > max(calendar): raise RuntimeError('calendar expired')
-            p = phase(now)
-            if day in calendar and p:
-                for symbol in symbols:
-                    current = dt.datetime.now(TZ)
-                    if not phase(current): break
-                    try: collect(db,session,symbol,current,phase(current))
-                    except Exception: logging.exception('collection failed: %s',symbol)
-            elif args.once: logging.info('outside trading session; no data requested')
-            if args.once: break
-            time.sleep(args.interval)
-    except KeyboardInterrupt: logging.info('stopped')
-    finally: db.close(); session.close()
+    from app import cli
+    cli()
 
 if __name__ == '__main__': main()

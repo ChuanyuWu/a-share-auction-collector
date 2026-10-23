@@ -1,38 +1,87 @@
-# A股当日竞价与分时成交采集器
+# A股行情采集与数据整理工具
 
-Python 3.10+，Windows/Linux 命令行程序。默认沪深自选股，每10秒轮询，SQLite WAL存储，失败重试三次。安装和运行：
+本机中文网页：管理沪深自选股、控制采集、查看原始和规范化数据、导出CSV/Parquet。**公开成交明细，非完整交易所逐笔。** 不提供策略或指标计算。
+
+## 启动
+
+Python 3.10+：
 
 ```powershell
-cd 此文件所在目录
 python -m pip install -r requirements.txt
-python collector.py --symbols 000001,600519 --interval 10
+python app.py --serve --open
 ```
 
-建议交易日前启动并保持电脑联网、不休眠。Ctrl+C停止，重启继续写入同一数据库。程序常驻但只在交易日相关交易时段请求行情。日历接口失败或覆盖不足会停止，不猜测节假日。--once只执行一次，非交易时段不会请求行情。
+浏览器访问 http://127.0.0.1:8765 ，点击“启动采集”。服务只监听本机，拒绝外部Host/Origin，不向局域网公开。端口被其他程序占用时需先解决冲突。
 
-数据位于data/market.sqlite3；日志位于data/collector.log。
-- quotes：盘口原始字段、来源时间、采集时间、竞价/连续交易阶段、fresh/stale_or_unverified状态。分析时必须筛选fresh。
-- detail_batches：每次完整成交明细响应，保留原始顺序与重复行。
-- details：按原始行与同批出现次数做尽力去重。字段通常为时间、价格、手数、来源附加字段、买卖方向；没有交易所序号，不能保证跨窗口去重或完整性。日期依靠同轮新鲜行情推断，明确标为未核验。
+网页股票区支持粘贴六位代码、逐项删除和导入带 `symbol` 列的UTF-8 CSV：
 
-竞价数据是定时盘口快照，不是完整竞价委托流；公开源可能不提供虚拟匹配价、未匹配量。竞价结果不能单凭最新价认定。成交接口最多请求最近2000条，网络中断或高成交股票可能丢失，不能盘后补全全天或宣称真实逐笔。若需要交易所完整逐笔成交/委托、订单序号和可靠补漏，需要另接已授权Level-2服务；本版本未实现该接入。大规模全市场不适合逐股轮询，应使用授权批量/推送接口。
+```csv
+symbol
+000001
+600519
+300750
+```
 
-当前交付经过离线时段边界与重复行保留测试，尚未进行交易时段接口实测；公共接口可变更，首次交易日请观察日志、原始字段和来源时间。
+添加后点击“保存配置”，下一轮生效。去重并反馈不支持代码；仅检查支持的代码格式，不保证标的存在或仍上市。配置保存到 `data/config.json`，不纳入Git。
 
-参考研究（本项目独立编写，未复制仓库代码）：
-- https://github.com/tiantianlaolao/astock-data-toolkit ：竞价采集、旧快照校验思路
-- https://github.com/YangSal/ashares_data_collect ：调度与采集架构
-- https://github.com/yuandanmiao/Ashare_xapi ：区分快照、成交和委托存储
-- https://github.com/T3rry7f/A-share-replay ：复盘方向；本次未核实其实现细节
-- https://github.com/akfamily/akshare ：交易日日历、公开成交接口字段参考
+命令行共享配置（带symbols/interval参数时会保存）：
 
-## 数据来源与定时运行
+```powershell
+python collector.py --symbols 000001,600519 --interval 10
+python collector.py --once
+python app.py --serve --scheduled
+```
 
-- 盘口/竞价采样：东方财富公开 `https://push2.eastmoney.com/api/qt/stock/get` 接口，程序直接使用 requests 请求。
-- 分时成交明细：东方财富公开 `https://push2.eastmoney.com/api/qt/stock/details/get` 接口；不是交易所 Level-2 真实逐笔。
-- 交易日：AKShare `tool_trade_date_hist_sina()`，来源为新浪交易日日历。
-- 无需行情账号或密钥，不提供完整性或服务稳定性保证。
+`--scheduled` 在服务启动时自动采集，非交易日结束采集，15:05停止采集，网页保持运行。每日Windows任务仍需调用此命令，已运行的服务会收到启动采集请求。服务和采集均有进程锁。关机无法采集，未登录无法运行当前桌面任务，锁屏可运行。启动时日历失败会每60秒重试。
 
-定时任务使用 `--scheduled` 参数：非交易日退出，北京时间15:05结束；Windows使用文件锁避免重复运行。当前桌面任务每天9:10启动，要求用户已登录，允许锁屏；关机无法执行。
+## 数据来源与局限
 
-测试：在项目根目录执行 `python -m unittest discover -s . -v`。测试临时数据库创建在当前目录，测试结束自动清理。
+- 东方财富公开 `https://push2.eastmoney.com/api/qt/stock/get`：盘口快照。按来源时间检查当天及90秒新鲜度。
+- 东方财富公开 `https://push2.eastmoney.com/api/qt/stock/details/get`：最多最近2000条公开明细。时间不含交易日期或交易所序号，日期按采集日推断，去重仅尽力保留同值出现次数。
+- AKShare `tool_trade_date_hist_sina()`：新浪交易日日历。覆盖不足时不采集。
+- `provider.py` 为数据源适配层，分离盘口、明细及日历；未来可接入有权限的Level-2源，当前无需账号或密钥。
+
+竞价期间接口也会返回明细，**不能认定为实际成交**，按来源时间单独归类并标记 `auction_semantics_unverified`。不作为成交量或VWAP依据。连续交易记录仍为公开源明细，不保证真实逐笔或完整性。停牌、网络中断、高成交量和窗口截断均可能造成缺失。开盘集合竞价成交价、虚拟撮合量、未匹配量未核验时不展示为已知结果。
+
+数量保留 `quantity_raw`，单位未核验，不自动乘100或计算成交额。方向代码保留原值，1/2/4仅展示供应商标签，未知代码不猜测。阶段按来源时刻分类，不根据首次采集时间混入连续交易。
+
+## 浏览、导出与后续量化
+
+页面按日期、股票、阶段、质量筛选，100条分页；每行可展开原始响应。盘口来源时间、采集时间、延迟和质量独立显示。运行概览包括每股记录数、最后落盘，事件记录成功、失败、陈旧、超时段间隔与窗口上限；这些提示不构成完整性认证。
+
+- CSV：UTF-8 BOM、稳定英文列名；Excel导入时将symbol设为文本以保留前导零。
+- Parquet：列类型固定，附数据字典metadata，适合pandas、DuckDB。
+- 字段字典：`/api/dictionary`；价格单位元，时间UTC+8，日期推断、数据等级和完整性字段随每条导出。
+- 只导出当前筛选结果；导出单次数据库读取快照，当前版本将结果载入内存，超大数据建议按日期/股票分批。
+
+```python
+import pandas as pd
+records = pd.read_parquet('details.parquet')
+continuous = records[records['phase'].eq('continuous')]
+# 先审核数量单位、质量与采集缺口，再计算任何成交指标。
+```
+
+## 存储、升级和备份
+
+`data/market.sqlite3` 保存原始quotes、details、detail_batches及采集events。规范化查询不覆盖原始行；旧竞价记录查询/导出时重新标注未核验。首次升级至v2自动使用SQLite备份接口生成 `backup-before-v2-*.sqlite3`，添加索引和事件表，不删除原记录。
+
+网页“下载一致性数据库备份”使用SQLite备份接口，包含已提交WAL数据。不要只拷贝运行中的主数据库或删除-wal/-shm。数据、日志、配置和备份不上传GitHub。采集错误写入events，启动与异常日志写入 `data/web.log`。
+
+网络支持系统代理/直连，默认系统代理；测试按钮使用当前选择但保存后才影响采集。每次请求连接超时5秒、读超时15秒，最多重试三次并退避，单股失败继续其他股票。停止等待在途请求结束，不立即强杀。
+
+## 验证
+
+```powershell
+python -m unittest discover -s . -v
+```
+
+测试覆盖代码导入、共享配置、本机访问限制、旧库备份迁移、竞价隔离、未知方向、固定响应去重、连接失败恢复、文件锁和CSV/Parquet导出。
+
+交易时段验收应核对网页最后成功时间、数据库新记录、导出数量一致；竞价和收盘尚未在新版中现场观察时不得宣称已验证。数据源接口可能变更。
+
+参考研究（独立编写，未复制仓库代码）：
+- https://github.com/tiantianlaolao/astock-data-toolkit
+- https://github.com/YangSal/ashares_data_collect
+- https://github.com/yuandanmiao/Ashare_xapi
+- https://github.com/T3rry7f/A-share-replay （未核实实现细节）
+- https://github.com/akfamily/akshare
